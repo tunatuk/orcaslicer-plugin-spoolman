@@ -5,6 +5,8 @@ __pycache__/
 # Local plugin settings and logs
 spoolman_settings.json
 spoolman_gcode.log
+spoolman_pending_usage.json
+spoolman_pending_*.json
 
 # System files
 .DS_Store
@@ -13,4 +15,5 @@ spoolman_gcode.log
 build/
 dist/
 *.egg-info/
+.tmp/
 

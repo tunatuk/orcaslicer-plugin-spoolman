@@ -22,7 +22,7 @@ An OrcaSlicer Python plugin integrating with [Spoolman](https://github.com/Donki
 - [x] **Smart Preset Merging**: Modifying settings in the OrcaSlicer UI (retraction, volumetric limits, fan overrides) is preserved and never overwritten by subsequent synchronizations.
 - [x] **Onboarding & Unified Setup**: Integrated interactive setup wizard explaining the plugin workflows.
 - [x] **API Status Validation**: Validates connections automatically, prompting configuration adjustments if offline.
-- [x] **G-Code Filament Deduction**: Automatically extracts printed filament consumption weight and prompts for Spoolman subtraction on export/print.
+- [x] **Confirmed Usage Tracking**: Extracts single-filament G-code usage, queues it locally, and records it in Spoolman only after you run **Review Spoolman Usage** and confirm the print.
 
 ## How It Works
 
@@ -32,39 +32,41 @@ An OrcaSlicer Python plugin integrating with [Spoolman](https://github.com/Donki
 2. **Duplicated Slicing Profiles**: The bridge copies all your active process presets (slicing profiles) and appends `- SpoolMan` to their names.
    ![Process Preset](docs/process_preset.png)
    
-3. **Activation**: Slicing requires selecting **both** a synced Spoolman filament preset **AND** a synced `- SpoolMan` process preset. Slicing with both active registers the capability and triggers the automatic weight deduction wizard upon G-code export/print.
+3. **Activation**: Select **both** a synced Spoolman filament preset **and** a synced `- SpoolMan` process preset. Slicing with both active queues usage for review. Multi-filament jobs are skipped because the current parser cannot safely assign each material's weight to a spool.
    ![Print Settings with Plugin](docs/print_settings_with_plugin.png)
    ![Plugin Capabilities](docs/plugin_capabilities.png)
 
 ## Installation
 
-To install the plugin, download the built `.whl` (wheel) package file and place it in a subdirectory inside OrcaSlicer's plugins folder.
+Deactivate the cloud-subscribed Spoolman plugin before installing this fork, so both plugins cannot modify the same presets or record the same usage. Download the built `.whl` (wheel) package file and place it in a subdirectory inside OrcaSlicer's plugins folder.
 
 ### macOS
 1. Open terminal and navigate to your OrcaSlicer plugins directory:
    `cd ~/Library/Application\ Support/OrcaSlicer/orca_plugins`
 2. Create a folder for the plugin:
    `mkdir -p orcaslicer_plugin_spoolman`
-3. Copy the built `orcaslicer_plugin_spoolman-1.0.0-py3-none-any.whl` file into that folder.
+3. Copy the built `orcaslicer_plugin_spoolman-1.1.0-py3-none-any.whl` file into that folder.
 4. Restart OrcaSlicer.
 
 ### Windows
 1. Open File Explorer and navigate to:
    `%APPDATA%\OrcaSlicer\orca_plugins`
 2. Create a folder named `orcaslicer_plugin_spoolman`.
-3. Copy the built `orcaslicer_plugin_spoolman-1.0.0-py3-none-any.whl` file into that folder.
+3. Copy the built `orcaslicer_plugin_spoolman-1.1.0-py3-none-any.whl` file into that folder.
 4. Restart OrcaSlicer.
 
 ## Configuration & Usage
 
-1. **Guide & URL Setup**: Upon first launch (or by selecting **Plugins > Spoolman Settings & Guide**), a dialog window will guide you through setup and prompt you to input your self-hosted Spoolman server URL (e.g., `http://localhost:7912`).
+1. **Guide & URL Setup**: Upon first launch (or by selecting **Plugins > Spoolman Settings & Guide**), set your Spoolman server URL. For an Unraid server, enter `http://<UNRAID_IP>:7912` with your server's actual address. The URL stays in a local settings file and is not stored in this repository.
    ![Settings Modal](docs/settings_modal.png)
    
 2. **Synchronization**: Run **Plugins > Sync Spoolman Profiles** to query Spoolman and populate OrcaSlicer's user directory.
    ![Prompt Sync New Profiles](docs/prompt_sync_new_profiles.png)
    
-3. **Weight Deduction**: Assign the synced filament profile and process profile, slice, and export your G-code. A prompt will ask you to confirm the filament consumption weight to deduct it from the active Spoolman spool.
+3. **Weight Deduction**: After a successful single-filament print, run **Plugins > Review Spoolman Usage**. Confirm the displayed spool ID and weight to record consumption, choose No to discard the pending record, or Cancel to leave it for later. If a request times out, verify the roll's remaining weight in Spoolman before clearing the pending record; the plugin will not automatically retry an uncertain deduction.
    ![Update Usage](docs/update_usage.png)
+
+This fork uses OrcaSlicer's `create_window(..., style=WINDOW_MODAL, on_submit=...)` API in place of the unavailable `show_dialog()` call. Profile synchronization no longer deletes existing Spoolman custom fields. The upstream project and its original authors retain credit under the MIT license.
 
 ## License
 
