@@ -709,7 +709,7 @@ button.secondary {{
                 <div class="step-num">3</div>
                 <div class="step-text">
                     <h4>3. Selection Required to Activate</h4>
-                    <p>You <strong>must</strong> select both a synced Spoolman filament <strong>AND</strong> a synced <code>- SpoolMan</code> process preset when slicing. This activates the Filament Usage Updater to deduct printed weight automatically!</p>
+                    <p>Select both a synced Spoolman filament <strong>and</strong> a synced <code>- SpoolMan</code> process preset when slicing. After a successful print, run <strong>Plugins &gt; Review Spoolman Usage</strong> and confirm the spool and weight before inventory is updated.</p>
                 </div>
             </div>
         </div>

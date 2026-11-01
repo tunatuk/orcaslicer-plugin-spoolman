@@ -64,7 +64,6 @@ Deactivate the cloud-subscribed Spoolman plugin before installing this fork, so 
    ![Prompt Sync New Profiles](docs/prompt_sync_new_profiles.png)
    
 3. **Weight Deduction**: After a successful single-filament print, run **Plugins > Review Spoolman Usage**. Confirm the displayed spool ID and weight to record consumption, choose No to discard the pending record, or Cancel to leave it for later. If a request times out, verify the roll's remaining weight in Spoolman before clearing the pending record; the plugin will not automatically retry an uncertain deduction.
-   ![Update Usage](docs/update_usage.png)
 
 This fork uses OrcaSlicer's `create_window(..., style=WINDOW_MODAL, on_submit=...)` API in place of the unavailable `show_dialog()` call. Profile synchronization no longer deletes existing Spoolman custom fields. The upstream project and its original authors retain credit under the MIT license.
 
