@@ -45,25 +45,26 @@ Deactivate the cloud-subscribed Spoolman plugin before installing this fork, so 
    `cd ~/Library/Application\ Support/OrcaSlicer/orca_plugins`
 2. Create a folder for the plugin:
    `mkdir -p orcaslicer_plugin_spoolman`
-3. Copy the built `orcaslicer_plugin_spoolman-1.1.0-py3-none-any.whl` file into that folder.
+3. Copy the built `orcaslicer_plugin_spoolman-1.2.0-py3-none-any.whl` file into that folder.
 4. Restart OrcaSlicer.
 
 ### Windows
 1. Open File Explorer and navigate to:
    `%APPDATA%\OrcaSlicer\orca_plugins`
 2. Create a folder named `orcaslicer_plugin_spoolman`.
-3. Copy the built `orcaslicer_plugin_spoolman-1.1.0-py3-none-any.whl` file into that folder.
+3. Copy the built `orcaslicer_plugin_spoolman-1.2.0-py3-none-any.whl` file into that folder.
 4. Restart OrcaSlicer.
 
 ## Configuration & Usage
 
-1. **Guide & URL Setup**: Upon first launch (or by selecting **Plugins > Spoolman Settings & Guide**), set your Spoolman server URL. For an Unraid server, enter `http://<UNRAID_IP>:7912` with your server's actual address. The URL stays in a local settings file and is not stored in this repository.
+1. **Open Spoolman**: Select the **Spoolman** tab in OrcaSlicer's main window. It provides **Settings & Guide**, **Sync Spoolman Profiles**, and **Review Spoolman Usage** buttons. If the tab is hidden, check **Preferences > General > Plugins > Visible plugin pages** and make sure the Spoolman page capability is enabled in the Plugins window.
+2. **Guide & URL Setup**: Open **Settings & Guide** and set your Spoolman server URL. For an Unraid server, enter `http://<UNRAID_IP>:7912` with your server's actual address. The URL stays in a local settings file and is not stored in this repository.
    ![Settings Modal](docs/settings_modal.png)
    
-2. **Synchronization**: Run **Plugins > Sync Spoolman Profiles** to query Spoolman and populate OrcaSlicer's user directory.
+3. **Synchronization**: Select **Sync Spoolman Profiles** in the Spoolman tab to query Spoolman and populate OrcaSlicer's user directory.
    ![Prompt Sync New Profiles](docs/prompt_sync_new_profiles.png)
    
-3. **Weight Deduction**: After a successful single-filament print, run **Plugins > Review Spoolman Usage**. Confirm the displayed spool ID and weight to record consumption, choose No to discard the pending record, or Cancel to leave it for later. If a request times out, verify the roll's remaining weight in Spoolman before clearing the pending record; the plugin will not automatically retry an uncertain deduction.
+4. **Weight Deduction**: After a successful single-filament print, select **Review Spoolman Usage** in the Spoolman tab. Confirm the displayed spool ID and weight to record consumption, choose No to discard the pending record, or Cancel to leave it for later. If a request times out, verify the roll's remaining weight in Spoolman before clearing the pending record; the plugin will not automatically retry an uncertain deduction.
 
 This fork uses OrcaSlicer's `create_window(..., style=WINDOW_MODAL, on_submit=...)` API in place of the unavailable `show_dialog()` call. Profile synchronization no longer deletes existing Spoolman custom fields. The upstream project and its original authors retain credit under the MIT license.
 

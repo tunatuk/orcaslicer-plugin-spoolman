@@ -24,8 +24,11 @@ def load_plugin():
     orca.slicing.SlicingPipelineCapabilityBase = object
     orca.slicing.psGCodePostProcess = 42
     orca.script = types.SimpleNamespace(ScriptPluginCapabilityBase=object)
+    orca.pages = types.ModuleType("orca.pages")
+    orca.pages.PagesPluginCapabilityBase = object
     orca.host = types.SimpleNamespace(ui=types.SimpleNamespace(WINDOW_MODAL=1))
-    with patch.dict(sys.modules, {"orca": orca, "orca.slicing": orca.slicing}):
+    with patch.dict(sys.modules, {"orca": orca, "orca.pages": orca.pages,
+                                  "orca.slicing": orca.slicing}):
         path = Path(__file__).parents[1] / "orcaslicer_plugin_spoolman" / "__init__.py"
         spec = importlib.util.spec_from_file_location("bridge_under_test", path)
         module = importlib.util.module_from_spec(spec)
@@ -56,6 +59,26 @@ class BridgeTests(unittest.TestCase):
         calls[0]["on_submit"]({"url": "http://spoolman.local:7912/"})
         self.assertEqual(self.bridge.get_settings()["spoolman_url"],
                          "http://spoolman.local:7912")
+
+    def test_spoolman_page_exposes_actions_and_dispatches_them(self):
+        page = self.bridge.SpoolmanPage()
+        html = page.get_ui()
+        for action in ("settings", "sync", "usage"):
+            self.assertIn(f"run('{action}')", html)
+        messages = []
+        page.post_message = messages.append
+        with patch.object(self.bridge.SpoolmanConfigScript, "execute") as settings, \
+             patch.object(self.bridge.SpoolmanSyncScript, "execute") as sync, \
+             patch.object(self.bridge.SpoolmanApplyUsageScript, "execute") as usage:
+            page.on_message({"action": "settings"})
+            page.on_message({"action": "sync"})
+            page.on_message({"action": "usage"})
+            settings.assert_called_once_with()
+            sync.assert_called_once_with()
+            usage.assert_called_once_with()
+        self.assertEqual(messages[-1]["text"], "0 pending usage records.")
+        page.on_message({"action": "unknown"})
+        self.assertEqual(len(messages), 3)
 
     def test_single_filament_queues_then_confirms_usage(self):
         gcode = os.path.join(self.temp.name, "job.gcode")

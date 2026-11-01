@@ -4,9 +4,10 @@
 # name = "Spoolman Bridge"
 # description = "Integrates OrcaSlicer with self-hosted Spoolman."
 # author = "Zao Soula and contributors"
-# version = "1.1.0"
+# version = "1.2.0"
 # ///
 import orca
+import orca.pages
 import orca.slicing
 import requests
 import json
@@ -709,7 +710,7 @@ button.secondary {{
                 <div class="step-num">3</div>
                 <div class="step-text">
                     <h4>3. Selection Required to Activate</h4>
-                    <p>Select both a synced Spoolman filament <strong>and</strong> a synced <code>- SpoolMan</code> process preset when slicing. After a successful print, run <strong>Plugins &gt; Review Spoolman Usage</strong> and confirm the spool and weight before inventory is updated.</p>
+                    <p>Select both a synced Spoolman filament <strong>and</strong> a synced <code>- SpoolMan</code> process preset when slicing. After a successful print, open the <strong>Spoolman</strong> tab, select <strong>Review Spoolman Usage</strong>, and confirm the spool and weight before inventory is updated.</p>
                 </div>
             </div>
         </div>
@@ -1107,9 +1108,67 @@ class SpoolmanConfigScript(orca.script.ScriptPluginCapabilityBase):
         show_tutorial_dialog()
         return orca.ExecutionResult.success("Settings opened")
 
+class SpoolmanPage(orca.pages.PagesPluginCapabilityBase):
+    def get_name(self):
+        return "Spoolman"
+
+    def get_ui(self):
+        return """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+body { margin: 0; padding: 24px; font-family: var(--orca-font, sans-serif); color: var(--orca-fg); background: var(--orca-bg); }
+main { max-width: 680px; margin: 0 auto; }
+h1 { margin-bottom: 8px; }
+p { color: var(--orca-muted); }
+.actions { display: grid; gap: 12px; margin: 24px 0; }
+button { text-align: left; padding: 12px 16px; cursor: pointer; }
+#status { padding: 12px; border: 1px solid var(--orca-border); border-radius: 6px; }
+</style></head><body><main>
+<h1>Spoolman</h1>
+<p>Manage your Spoolman connection and filament profiles.</p>
+<div id="status" role="status">Loading status…</div>
+<div class="actions">
+  <button type="button" onclick="run('settings')">Settings &amp; Guide</button>
+  <button type="button" onclick="run('sync')">Sync Spoolman Profiles</button>
+  <button type="button" onclick="run('usage')">Review Spoolman Usage</button>
+</div>
+<p>Usage is recorded only after you confirm a successful print.</p>
+<script>
+const status = document.getElementById('status');
+function run(action) {
+  status.textContent = 'Working…';
+  window.orca.postMessage({action: action});
+}
+window.orca.onMessage(function (data) {
+  if (data && data.type === 'status') status.textContent = data.text;
+});
+window.orca.postMessage({action: 'status'});
+</script></main></body></html>"""
+
+    def on_message(self, data):
+        if not isinstance(data, dict):
+            return
+        action = data.get("action")
+        if action == "settings":
+            SpoolmanConfigScript().execute()
+        elif action == "sync":
+            SpoolmanSyncScript().execute()
+        elif action == "usage":
+            SpoolmanApplyUsageScript().execute()
+        elif action != "status":
+            return
+        try:
+            with PENDING_LOCK:
+                count = len(read_pending_usage())
+            label = "pending usage record" if count == 1 else "pending usage records"
+            self.post_message({"type": "status", "text": f"{count} {label}."})
+        except Exception as exc:
+            write_log(f"[PAGE ERROR] {exc}")
+            self.post_message({"type": "status", "text": "Could not read pending usage."})
+
 @orca.plugin
 class SpoolmanPlugin(orca.base):
     def register_capabilities(self):
+        orca.register_capability(SpoolmanPage)
         orca.register_capability(SpoolmanGCode)
         orca.register_capability(SpoolmanApplyUsageScript)
         orca.register_capability(SpoolmanCleanupScript)
