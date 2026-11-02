@@ -80,6 +80,42 @@ class BridgeTests(unittest.TestCase):
         page.on_message({"action": "unknown"})
         self.assertEqual(len(messages), 3)
 
+    def test_wheel_install_resolves_orcaslicer_user_directory(self):
+        root = os.path.join(self.temp.name, "OrcaSlicer")
+        plugin = os.path.join(root, "orca_plugins", "bridge.whl",
+                              "__whl_extracted__", "bridge", "bridge")
+        self.assertEqual(self.bridge.resolve_support_dir(plugin), root)
+        subscribed = os.path.join(root, "orca_plugins", "_subscribed",
+                                  "account", "plugin")
+        self.assertEqual(self.bridge.resolve_support_dir(subscribed), root)
+
+    def test_sync_creates_spool_preset_in_user_filament_folder(self):
+        user_dir = Path(self.temp.name) / "user"
+        account = user_dir / "account"
+        account.mkdir(parents=True)
+
+        class Response:
+            status_code = 200
+
+            def json(self):
+                return [{"id": 12, "filament": {"name": "PLA", "material": "PLA",
+                        "vendor": {"name": "Example"}}}]
+
+        with patch.object(self.bridge, "USER_DIR", str(user_dir)), \
+             patch.object(self.bridge, "SYSTEM_DIR", str(Path(self.temp.name) / "system")), \
+             patch.object(self.bridge.requests, "get", return_value=Response()):
+            count, modified = self.bridge.sync_spoolman_filaments(dry_run=True)
+            self.assertEqual(count, 1)
+            self.assertTrue(modified)
+            self.assertFalse((account / "filament").exists())
+            count, modified = self.bridge.sync_spoolman_filaments(dry_run=False)
+            self.assertEqual(count, 1)
+            self.assertTrue(modified)
+        preset = account / "filament" / "Example PLA (#12) - Spoolman.json"
+        self.assertTrue(preset.exists())
+        self.assertEqual(json.loads(preset.read_text())["name"],
+                         "Example PLA (#12) - Spoolman")
+
     def test_single_filament_queues_then_confirms_usage(self):
         gcode = os.path.join(self.temp.name, "job.gcode")
         with open(gcode, "w", encoding="utf-8") as f:

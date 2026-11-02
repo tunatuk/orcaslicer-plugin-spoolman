@@ -4,7 +4,7 @@
 # name = "Spoolman Bridge"
 # description = "Integrates OrcaSlicer with self-hosted Spoolman."
 # author = "Zao Soula and contributors"
-# version = "1.2.0"
+# version = "1.2.1"
 # ///
 import orca
 import orca.pages
@@ -26,8 +26,20 @@ LOG_FILE = os.path.join(PLUGIN_DIR, "spoolman_gcode.log")
 PENDING_FILE = os.path.join(PLUGIN_DIR, "spoolman_pending_usage.json")
 PENDING_LOCK = threading.Lock()
 
-# Resolved app support directories
-SUPPORT_DIR = os.path.dirname(os.path.dirname(PLUGIN_DIR)) # App Support/OrcaSlicer
+# Wheel plugins run from a nested __whl_extracted__ directory. Walk upward to
+# OrcaSlicer's plugin root instead of assuming a fixed number of parent folders.
+def resolve_support_dir(plugin_dir):
+    current = os.path.abspath(plugin_dir)
+    while True:
+        if os.path.basename(current).lower() == "orca_plugins":
+            return os.path.dirname(current)
+        parent = os.path.dirname(current)
+        if parent == current:
+            # Source checkout used by development tests, outside OrcaSlicer.
+            return os.path.dirname(os.path.dirname(os.path.abspath(plugin_dir)))
+        current = parent
+
+SUPPORT_DIR = resolve_support_dir(PLUGIN_DIR)
 SYSTEM_DIR = os.path.join(SUPPORT_DIR, "system")
 USER_DIR = os.path.join(SUPPORT_DIR, "user")
 
@@ -234,7 +246,8 @@ def sync_spoolman_filaments(dry_run=False):
             
             for subdir in user_subdirs:
                 fil_dir = os.path.join(subdir, "filament")
-                os.makedirs(fil_dir, exist_ok=True)
+                if not dry_run:
+                    os.makedirs(fil_dir, exist_ok=True)
                 
                 filename = sanitize_filename(preset_name) + ".json"
                 filepath = os.path.join(fil_dir, filename)
@@ -760,6 +773,9 @@ def delayed_startup_check():
     time.sleep(6.0)
     try:
         settings = get_settings()
+        if not os.path.isdir(USER_DIR):
+            write_log(f"[SYNC ERROR] OrcaSlicer user preset directory not found: {USER_DIR}")
+            return
         
         # Check first run
         if settings.get("first_run", True):
@@ -1053,6 +1069,8 @@ class SpoolmanSyncScript(orca.script.ScriptPluginCapabilityBase):
         try:
             settings = get_settings()
             url = settings["spoolman_url"].rstrip('/')
+            if not os.path.isdir(USER_DIR):
+                raise RuntimeError(f"OrcaSlicer user preset directory not found: {USER_DIR}")
             
             # Test connection first!
             connection_failed = False

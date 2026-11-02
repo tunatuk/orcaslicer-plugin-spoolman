@@ -38,22 +38,9 @@ An OrcaSlicer Python plugin integrating with [Spoolman](https://github.com/Donki
 
 ## Installation
 
-Deactivate the cloud-subscribed Spoolman plugin before installing this fork, so both plugins cannot modify the same presets or record the same usage. Download the built `.whl` (wheel) package file and place it in a subdirectory inside OrcaSlicer's plugins folder.
+Deactivate the cloud-subscribed Spoolman plugin and any older local versions first, so two copies cannot modify the same presets or record the same usage. In OrcaSlicer, open **File > Plugins**, use the split install button's **Install local plugin** option, and select `orcaslicer_plugin_spoolman-1.2.1-py3-none-any.whl`. Activate the new version and restart OrcaSlicer. When upgrading from an earlier wheel, open **Settings & Guide** and enter the Spoolman URL again; settings stored inside the previous wheel's extracted folder are not carried forward automatically.
 
-### macOS
-1. Open terminal and navigate to your OrcaSlicer plugins directory:
-   `cd ~/Library/Application\ Support/OrcaSlicer/orca_plugins`
-2. Create a folder for the plugin:
-   `mkdir -p orcaslicer_plugin_spoolman`
-3. Copy the built `orcaslicer_plugin_spoolman-1.2.0-py3-none-any.whl` file into that folder.
-4. Restart OrcaSlicer.
-
-### Windows
-1. Open File Explorer and navigate to:
-   `%APPDATA%\OrcaSlicer\orca_plugins`
-2. Create a folder named `orcaslicer_plugin_spoolman`.
-3. Copy the built `orcaslicer_plugin_spoolman-1.2.0-py3-none-any.whl` file into that folder.
-4. Restart OrcaSlicer.
+Version 1.2.1 fixes the user preset path for wheel installations. Earlier wheels could load and connect to Spoolman but report no changes during sync because they looked for presets inside the extracted wheel folder.
 
 ## Configuration & Usage
 
