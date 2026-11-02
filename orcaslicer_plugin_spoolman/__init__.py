@@ -3,10 +3,11 @@
 # [tool.orcaslicer.plugin]
 # name = "Spoolman Bridge"
 # description = "Integrates OrcaSlicer with self-hosted Spoolman."
-# author = "Zao Soula"
-# version = "1.0.0"
+# author = "Zao Soula and contributors"
+# version = "1.2.1"
 # ///
 import orca
+import orca.pages
 import orca.slicing
 import requests
 import json
@@ -14,14 +15,31 @@ import os
 import re
 import threading
 import time
+import math
+import tempfile
+from html import escape
 
 # Load/save settings in the same directory as the plugin
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(PLUGIN_DIR, "spoolman_settings.json")
 LOG_FILE = os.path.join(PLUGIN_DIR, "spoolman_gcode.log")
+PENDING_FILE = os.path.join(PLUGIN_DIR, "spoolman_pending_usage.json")
+PENDING_LOCK = threading.Lock()
 
-# Resolved app support directories
-SUPPORT_DIR = os.path.dirname(os.path.dirname(PLUGIN_DIR)) # App Support/OrcaSlicer
+# Wheel plugins run from a nested __whl_extracted__ directory. Walk upward to
+# OrcaSlicer's plugin root instead of assuming a fixed number of parent folders.
+def resolve_support_dir(plugin_dir):
+    current = os.path.abspath(plugin_dir)
+    while True:
+        if os.path.basename(current).lower() == "orca_plugins":
+            return os.path.dirname(current)
+        parent = os.path.dirname(current)
+        if parent == current:
+            # Source checkout used by development tests, outside OrcaSlicer.
+            return os.path.dirname(os.path.dirname(os.path.abspath(plugin_dir)))
+        current = parent
+
+SUPPORT_DIR = resolve_support_dir(PLUGIN_DIR)
 SYSTEM_DIR = os.path.join(SUPPORT_DIR, "system")
 USER_DIR = os.path.join(SUPPORT_DIR, "user")
 
@@ -41,6 +59,25 @@ def write_log(line):
             f.write(line + "\n")
     except Exception:
         pass
+
+def read_pending_usage():
+    if not os.path.exists(PENDING_FILE):
+        return []
+    with open(PENDING_FILE, "r", encoding="utf-8") as f:
+        items = json.load(f)
+    if not isinstance(items, list):
+        raise ValueError("Pending usage file is not a list")
+    return items
+
+def write_pending_usage(items):
+    fd, temp_path = tempfile.mkstemp(prefix="spoolman_pending_", suffix=".json", dir=PLUGIN_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(items, f, indent=2)
+        os.replace(temp_path, PENDING_FILE)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 def get_user_subdirs():
     if not os.path.exists(USER_DIR):
@@ -209,7 +246,8 @@ def sync_spoolman_filaments(dry_run=False):
             
             for subdir in user_subdirs:
                 fil_dir = os.path.join(subdir, "filament")
-                os.makedirs(fil_dir, exist_ok=True)
+                if not dry_run:
+                    os.makedirs(fil_dir, exist_ok=True)
                 
                 filename = sanitize_filename(preset_name) + ".json"
                 filepath = os.path.join(fil_dir, filename)
@@ -342,12 +380,6 @@ def ensure_spoolman_fields(dry_run=False):
         if r.status_code != 200:
             return 0
         existing_keys = {field["key"] for field in r.json()}
-        
-        # Clean up range, cost & printer fields if they exist (we inherit printer compatibility now)
-        for key in ["nozzle_temperature_range_low", "nozzle_temperature_range_high", "filament_cost", "compatible_printers"]:
-            if key in existing_keys:
-                if not dry_run:
-                    requests.delete(f"{url}/api/v1/field/filament/{key}", timeout=5)
         
         required_fields = {
             "max_volumetric_speed": {"name": "Max Volumetric Speed", "field_type": "float", "unit": "mm\u00b3/s"}
@@ -544,7 +576,7 @@ def run_cleanup_logic():
 
 def show_tutorial_dialog():
     settings = get_settings()
-    current_url = settings.get("spoolman_url", "http://localhost:7912")
+    current_url = escape(settings.get("spoolman_url", "http://localhost:7912"), quote=True)
     
     html_content = f"""<!DOCTYPE html>
 <html>
@@ -691,7 +723,7 @@ button.secondary {{
                 <div class="step-num">3</div>
                 <div class="step-text">
                     <h4>3. Selection Required to Activate</h4>
-                    <p>You <strong>must</strong> select both a synced Spoolman filament <strong>AND</strong> a synced <code>- SpoolMan</code> process preset when slicing. This activates the Filament Usage Updater to deduct printed weight automatically!</p>
+                    <p>Select both a synced Spoolman filament <strong>and</strong> a synced <code>- SpoolMan</code> process preset when slicing. After a successful print, open the <strong>Spoolman</strong> tab, select <strong>Review Spoolman Usage</strong>, and confirm the spool and weight before inventory is updated.</p>
                 </div>
             </div>
         </div>
@@ -706,7 +738,7 @@ button.secondary {{
     </div>
     
     <div class="buttons">
-        <button class="secondary" onclick="window.orca.submit({{}})">Cancel</button>
+        <button class="secondary" onclick="window.orca.close()">Cancel</button>
         <button onclick="submitForm()">Save & Close</button>
     </div>
     
@@ -718,24 +750,37 @@ button.secondary {{
     </script>
 </body>
 </html>"""
-    return orca.host.ui.show_dialog(html=html_content, title="Spoolman Settings & Guide", width=560, height=500)
+    def on_submit(result):
+        new_url = (result or {}).get("url", "").strip().rstrip("/")
+        if not re.match(r"^https?://[^/\s]+$", new_url, re.IGNORECASE):
+            orca.host.ui.message("Enter a complete http:// or https:// Spoolman URL.",
+                                 title="Spoolman Bridge", icon="warning")
+            return
+        try:
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump({"spoolman_url": new_url, "first_run": False}, f, indent=4)
+            write_log(f"[SETTINGS] Spoolman URL saved: {new_url}")
+        except Exception as exc:
+            orca.host.ui.message(f"Could not save Spoolman settings: {exc}",
+                                 title="Spoolman Bridge", icon="error")
+
+    return orca.host.ui.create_window(
+        html=html_content, title="Spoolman Settings & Guide", width=560, height=500,
+        style=orca.host.ui.WINDOW_MODAL, on_submit=on_submit)
 
 def delayed_startup_check():
     # Wait for OrcaSlicer to finish loading and dismiss the splash screen
     time.sleep(6.0)
     try:
         settings = get_settings()
+        if not os.path.isdir(USER_DIR):
+            write_log(f"[SYNC ERROR] OrcaSlicer user preset directory not found: {USER_DIR}")
+            return
         
         # Check first run
         if settings.get("first_run", True):
-            result = show_tutorial_dialog()
-            if result and result.get("url"):
-                settings["spoolman_url"] = result["url"]
-            try:
-                with open(SETTINGS_FILE, "w") as f:
-                    json.dump({"spoolman_url": settings.get("spoolman_url", "http://localhost:7912"), "first_run": False}, f, indent=4)
-            except Exception:
-                pass
+            show_tutorial_dialog()
+            return
                 
         url = settings["spoolman_url"].rstrip('/')
         
@@ -851,10 +896,11 @@ class SpoolmanGCode(orca.slicing.SlicingPipelineCapabilityBase):
                     if stripped.startswith(";"):
                         if "filament used [g] =" in stripped:
                             val = stripped.split("=")[1].strip()
-                            if "," in val:
-                                used_g = float(val.split(",")[0].strip())
-                            else:
-                                used_g = float(val)
+                            weights = [float(part.strip()) for part in val.split(",")]
+                            if sum(weight > 0 for weight in weights) > 1:
+                                write_log("[SKIPPED] Multiple filaments used; per-spool deduction is unsupported.")
+                                return orca.ExecutionResult.skipped("Multiple filaments used; no usage queued")
+                            used_g = max(weights)
                         elif "filament_vendor =" in stripped:
                             gcode_vendor = stripped.split("=")[1].strip().strip('"')
                         elif "filament_type =" in stripped:
@@ -870,7 +916,7 @@ class SpoolmanGCode(orca.slicing.SlicingPipelineCapabilityBase):
             write_log(f"[ERROR] {msg}")
             return orca.ExecutionResult.failure(orca.PluginResult.FatalError, msg)
 
-        if used_g <= 0.0:
+        if not math.isfinite(used_g) or used_g <= 0.0:
             msg = "No filament usage detected in G-code."
             write_log(f"[SKIPPED] {msg}")
             return orca.ExecutionResult.skipped(msg)
@@ -920,32 +966,88 @@ class SpoolmanGCode(orca.slicing.SlicingPipelineCapabilityBase):
 
         write_log(f"[MATCHED] Best matching spool: #{spool_id} ({spool_desc}) with score {score}")
 
-        # Ask user for confirmation
-        question = f"Do you want to remove {used_g}g from spool #{spool_id} ({spool_desc})?"
-        choice = orca.host.ui.message(question, title="Spoolman Bridge", buttons="yes_no", icon="question")
-        
-        if choice != "yes":
-            msg = "User skipped filament deduction."
-            write_log(f"[SKIPPED] {msg}")
-            return orca.ExecutionResult.skipped(msg)
-
-        # Deduct weight
+        # Slicing hooks run on a worker thread. Calling host UI here can deadlock.
+        # Queue the usage for explicit confirmation from a Script capability instead.
         try:
-            payload = {"use_weight": used_g}
-            write_log(f"[API PUT] Sending payload {payload} to {url}/api/v1/spool/{spool_id}/use")
-            r = requests.put(f"{url}/api/v1/spool/{spool_id}/use", json=payload, timeout=10)
-            if r.status_code == 200:
-                msg = f"Deducted {used_g}g from spool #{spool_id} ({spool_desc})"
-                write_log(f"[SUCCESS] {msg}")
-                return orca.ExecutionResult.success(msg)
-            else:
-                msg = f"Spoolman returned status {r.status_code}: {r.text}"
-                write_log(f"[API ERROR] {msg}")
-                return orca.ExecutionResult.failure(orca.PluginResult.RecoverableError, msg)
+            job_key = f"{os.path.abspath(ctx.gcode_path)}:{os.path.getmtime(ctx.gcode_path)}:{used_g}"
+            item = {"job_key": job_key, "spool_id": spool_id, "spool_desc": spool_desc,
+                    "used_g": used_g, "queued_at": time.time()}
+            with PENDING_LOCK:
+                pending = read_pending_usage()
+                if not any(record.get("job_key") == job_key for record in pending):
+                    pending.append(item)
+                    write_pending_usage(pending)
+            write_log(f"[QUEUED] {used_g}g for spool #{spool_id} ({spool_desc})")
+            return orca.ExecutionResult.success("Spoolman usage queued for confirmation")
         except Exception as e:
-            msg = f"Failed to contact Spoolman: {e}"
-            write_log(f"[API EXCEPTION] {msg}")
+            msg = f"Failed to queue Spoolman usage: {e}"
+            write_log(f"[QUEUE ERROR] {msg}")
             return orca.ExecutionResult.failure(orca.PluginResult.RecoverableError, msg)
+
+class SpoolmanApplyUsageScript(orca.script.ScriptPluginCapabilityBase):
+    def get_name(self):
+        return "Review Spoolman Usage"
+
+    def execute(self):
+        try:
+            with PENDING_LOCK:
+                pending = read_pending_usage()
+            if not pending:
+                orca.host.ui.message("No pending Spoolman usage.", title="Spoolman Bridge")
+                return orca.ExecutionResult.skipped("No pending usage")
+
+            item = pending[0]
+            if item.get("state") == "sending":
+                choice = orca.host.ui.message(
+                    "A previous usage request may already have reached Spoolman. Check the roll's "
+                    "remaining weight in Spoolman. Discard this pending record after verifying it?",
+                    title="Spoolman Bridge", buttons="yes_no", icon="warning")
+                if choice == "yes":
+                    with PENDING_LOCK:
+                        current = read_pending_usage()
+                        write_pending_usage([record for record in current
+                                             if record.get("job_key") != item["job_key"]])
+                return orca.ExecutionResult.skipped("Review ambiguous usage in Spoolman")
+            spool_id = int(item["spool_id"])
+            used_g = float(item["used_g"])
+            if not math.isfinite(used_g) or used_g <= 0:
+                raise ValueError("Invalid queued weight")
+            url = get_settings()["spoolman_url"].rstrip("/")
+            question = (f"Record {used_g:g} g used from spool #{spool_id} "
+                        f"({item['spool_desc']}) in Spoolman?\n\n"
+                        f"Confirm this after the print. {len(pending)} pending job(s).")
+            choice = orca.host.ui.message(question, title="Spoolman Bridge",
+                                          buttons="yes_no_cancel", icon="question")
+            if choice == "cancel":
+                return orca.ExecutionResult.skipped("Usage review cancelled")
+            if choice == "no":
+                with PENDING_LOCK:
+                    current = read_pending_usage()
+                    current = [record for record in current if record.get("job_key") != item["job_key"]]
+                    write_pending_usage(current)
+                return orca.ExecutionResult.skipped("Pending usage discarded")
+
+            # Mark before the request. A timeout or crash can leave the server-side
+            # result uncertain, so the next run must not silently retry the deduction.
+            with PENDING_LOCK:
+                current = read_pending_usage()
+                for record in current:
+                    if record.get("job_key") == item["job_key"]:
+                        record["state"] = "sending"
+                write_pending_usage(current)
+            response = requests.put(f"{url}/api/v1/spool/{spool_id}/use",
+                                    json={"use_weight": used_g}, timeout=10)
+            response.raise_for_status()
+            with PENDING_LOCK:
+                current = read_pending_usage()
+                current = [record for record in current if record.get("job_key") != item["job_key"]]
+                write_pending_usage(current)
+            orca.host.ui.message(f"Recorded {used_g:g} g used from spool #{spool_id}.",
+                                 title="Spoolman Bridge")
+            return orca.ExecutionResult.success("Spoolman usage recorded")
+        except Exception as exc:
+            write_log(f"[USAGE ERROR] {exc}")
+            return orca.ExecutionResult.failure(orca.PluginResult.RecoverableError, str(exc))
 
 class SpoolmanCleanupScript(orca.script.ScriptPluginCapabilityBase):
     def get_name(self):
@@ -967,6 +1069,8 @@ class SpoolmanSyncScript(orca.script.ScriptPluginCapabilityBase):
         try:
             settings = get_settings()
             url = settings["spoolman_url"].rstrip('/')
+            if not os.path.isdir(USER_DIR):
+                raise RuntimeError(f"OrcaSlicer user preset directory not found: {USER_DIR}")
             
             # Test connection first!
             connection_failed = False
@@ -1019,64 +1123,72 @@ class SpoolmanConfigScript(orca.script.ScriptPluginCapabilityBase):
         return "Spoolman Settings & Guide"
 
     def execute(self):
-        result = show_tutorial_dialog()
-        if result and result.get("url"):
-            new_url = result["url"]
-            try:
-                with open(SETTINGS_FILE, "w") as f:
-                    json.dump({"spoolman_url": new_url, "first_run": False}, f, indent=4)
-                
-                # Test connection of the new URL
-                url_test = new_url.rstrip('/')
-                connection_failed = False
-                error_msg = ""
-                try:
-                    r = requests.get(f"{url_test}/api/v1/spool?allow_archived=false", timeout=5)
-                    if r.status_code != 200:
-                        connection_failed = True
-                        error_msg = f"status code {r.status_code}"
-                except Exception as e:
-                    connection_failed = True
-                    error_msg = str(e)
+        show_tutorial_dialog()
+        return orca.ExecutionResult.success("Settings opened")
 
-                if connection_failed:
-                    orca.host.ui.message(
-                        f"URL saved, but connection failed to:\n{new_url}\n\nError: {error_msg}\n\nPlease check Spoolman status.",
-                        title="Spoolman Connection Warning",
-                        icon="warning"
-                    )
-                else:
-                    # Connection succeeded! Check if anything needs syncing
-                    created_fields = ensure_spoolman_fields(dry_run=True)
-                    sync_count, modified_fils = sync_spoolman_filaments(dry_run=True)
-                    created_procs, modified_procs = sync_spoolman_processes(dry_run=True)
-                    
-                    modified = modified_fils or modified_procs or (created_fields > 0)
-                    
-                    if modified:
-                        choice = orca.host.ui.message(
-                            "Connection successful!\n\nNew Spoolman profiles or settings changes detected. Do you want to sync them now?",
-                            title="Spoolman Bridge",
-                            buttons="yes_no",
-                            icon="question"
-                        )
-                        if choice == "yes":
-                            count = auto_inject_presets()
-                            real_created_fields = ensure_spoolman_fields(dry_run=False)
-                            real_sync_count, _ = sync_spoolman_filaments(dry_run=False)
-                            real_created_procs, _ = sync_spoolman_processes(dry_run=False)
-                            
-                            orca.host.ui.message("Spoolman spools & processes synced successfully. Please restart OrcaSlicer to load them.", title="Spoolman Bridge", icon="info")
-                    else:
-                        orca.host.ui.message("Connection successful! Spoolman profiles are already up-to-date.", title="Spoolman Bridge", icon="info")
-            except Exception as e:
-                orca.host.ui.message(f"Failed to save settings: {e}", title="Spoolman Bridge", icon="error")
-        return orca.ExecutionResult.success("Settings closed")
+class SpoolmanPage(orca.pages.PagesPluginCapabilityBase):
+    def get_name(self):
+        return "Spoolman"
+
+    def get_ui(self):
+        return """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+body { margin: 0; padding: 24px; font-family: var(--orca-font, sans-serif); color: var(--orca-fg); background: var(--orca-bg); }
+main { max-width: 680px; margin: 0 auto; }
+h1 { margin-bottom: 8px; }
+p { color: var(--orca-muted); }
+.actions { display: grid; gap: 12px; margin: 24px 0; }
+button { text-align: left; padding: 12px 16px; cursor: pointer; }
+#status { padding: 12px; border: 1px solid var(--orca-border); border-radius: 6px; }
+</style></head><body><main>
+<h1>Spoolman</h1>
+<p>Manage your Spoolman connection and filament profiles.</p>
+<div id="status" role="status">Loading status…</div>
+<div class="actions">
+  <button type="button" onclick="run('settings')">Settings &amp; Guide</button>
+  <button type="button" onclick="run('sync')">Sync Spoolman Profiles</button>
+  <button type="button" onclick="run('usage')">Review Spoolman Usage</button>
+</div>
+<p>Usage is recorded only after you confirm a successful print.</p>
+<script>
+const status = document.getElementById('status');
+function run(action) {
+  status.textContent = 'Working…';
+  window.orca.postMessage({action: action});
+}
+window.orca.onMessage(function (data) {
+  if (data && data.type === 'status') status.textContent = data.text;
+});
+window.orca.postMessage({action: 'status'});
+</script></main></body></html>"""
+
+    def on_message(self, data):
+        if not isinstance(data, dict):
+            return
+        action = data.get("action")
+        if action == "settings":
+            SpoolmanConfigScript().execute()
+        elif action == "sync":
+            SpoolmanSyncScript().execute()
+        elif action == "usage":
+            SpoolmanApplyUsageScript().execute()
+        elif action != "status":
+            return
+        try:
+            with PENDING_LOCK:
+                count = len(read_pending_usage())
+            label = "pending usage record" if count == 1 else "pending usage records"
+            self.post_message({"type": "status", "text": f"{count} {label}."})
+        except Exception as exc:
+            write_log(f"[PAGE ERROR] {exc}")
+            self.post_message({"type": "status", "text": "Could not read pending usage."})
 
 @orca.plugin
 class SpoolmanPlugin(orca.base):
     def register_capabilities(self):
+        orca.register_capability(SpoolmanPage)
         orca.register_capability(SpoolmanGCode)
+        orca.register_capability(SpoolmanApplyUsageScript)
         orca.register_capability(SpoolmanCleanupScript)
         orca.register_capability(SpoolmanSyncScript)
         orca.register_capability(SpoolmanConfigScript)
